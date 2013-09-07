@@ -1,4 +1,4 @@
-package cdb
+package cdbmap
 
 import (
 	"bufio"
@@ -19,7 +19,7 @@ func Make(w io.WriteSeeker, r io.Reader) (err error) {
 		}
 	}()
 
-	if _, err = w.Seek(int64(headerSize), 0); err != nil {
+	if _, err = w.Seek(int64(HeaderSize), 0); err != nil {
 		return
 	}
 
@@ -30,7 +30,7 @@ func Make(w io.WriteSeeker, r io.Reader) (err error) {
 	hw := io.MultiWriter(hash, wb) // Computes hash when writing record key.
 	rr := &recReader{rb}
 	htables := make(map[uint32][]slot)
-	pos := headerSize
+	pos := HeaderSize
 	// Read all records and write to output.
 	for {
 		// Record format is "+klen,dlen:key->data\n"
@@ -66,7 +66,7 @@ func Make(w io.WriteSeeker, r io.Reader) (err error) {
 	}
 	slotTable := make([]slot, maxSlots*2)
 
-	header := make([]byte, headerSize)
+	header := make([]byte, HeaderSize)
 	// Write hash tables.
 	for i := uint32(0); i < 256; i++ {
 		slots := htables[i]

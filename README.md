@@ -1,6 +1,6 @@
-# go-cdb
+# go-cdbmap
 
-go-cdb is a pure [Go](http://golang.org/) package to read and write cdb ("constant database") files.
+go-cdbmap is a pure [Go](http://golang.org/) package to read and write cdb ("constant database") files, forked from [jbarham's go-cdb library](https://github.com/jbarham/go-cdb/).
 
 The cdb file format is a machine-independent format with the following features:
 
@@ -15,15 +15,37 @@ at http://cr.yp.to/cdb.html.
 
 Assuming you have a working Go environment, installation is simply:
 
-	go get github.com/jbarham/go-cdb
+	go get github.com/clee/go-cdbmap
 
 The package documentation can be viewed online at
-http://gopkgdoc.appspot.com/pkg/github.com/jbarham/go-cdb
-or on the command line by running `go doc github.com/jbarham/go-cdb`.
+http://gopkgdoc.appspot.com/pkg/github.com/clee/go-cdbmap
+or on the command line by running `go doc github.com/clee/go-cdbmap`.
 
-The included self-test program `cdb_test.go` illustrates usage of the package.
+The usage is extremely simple; here is an example program that shows usage of the entire API.
+
+```
+package main
+
+import (
+	"github.com/clee/go-cdbmap"
+)
+
+func main() {
+	// Read a cdb-formatted file into a map[string][]string
+	c, err := cdbmap.Open("example.cdb")
+	m, err := c.Map()
+	if err != nil {
+		panic(err)
+	}
+
+	// Take a map[string][]string and turn it into a cdb file
+	nc := cdbmap.NewFromMap(m)
+	nc.Write("/tmp/test.cdb")
+}
+
+```
 
 ## Utilities
 
-The go-cdb package includes ports of the programs `cdbdump` and `cdbmake` from
+The go-cdbmap package includes ports of the programs `cdbdump` and `cdbmake` from
 the [original implementation](http://cr.yp.to/cdb/cdbmake.html).

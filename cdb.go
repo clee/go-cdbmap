@@ -2,31 +2,26 @@
 //
 // See the original cdb specification and C implementation by D. J. Bernstein
 // at http://cr.yp.to/cdb.html.
-package cdb
+package cdbmap
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/binary"
 	"io"
+	"io/ioutil"
 	"os"
 	"runtime"
 )
 
 const (
-	headerSize = uint32(256 * 8)
+	HeaderSize = uint32(256 * 8)
 )
 
 type Cdb struct {
 	r      io.ReaderAt
 	closer io.Closer
 	buf    []byte
-	loop   uint32 // number of hash slots searched under this key
-	khash  uint32 // initialized if loop is nonzero
-	kpos   uint32 // initialized if loop is nonzero
-	hpos   uint32 // initialized if loop is nonzero
-	hslots uint32 // initialized if loop is nonzero
-	dpos   uint32 // initialized if FindNext() returns true
-	dlen   uint32 // initialized if FindNext() returns true
+	m      map[string][]string
 }
 
 // Open opens the named file read-only and returns a new Cdb object.  The file
@@ -60,111 +55,141 @@ func New(r io.ReaderAt) *Cdb {
 	return c
 }
 
-// Data returns the first data value for the given key.
-// If no such record exists, it returns EOF.
-func (c *Cdb) Data(key []byte) (data []byte, err error) {
-	c.FindStart()
-	if err = c.find(key); err != nil {
-		return nil, err
+func NewFromMap(m map[string][]string) *Cdb {
+	c := new(Cdb)
+	c.r = nil
+	c.m = m
+	return c
+}
+
+func (c *Cdb) Write(f string) (err error) {
+	tmp, err := ioutil.TempFile("", f)
+	if err != nil { return }
+	w, err := os.OpenFile(tmp.Name(), os.O_RDWR | os.O_CREATE, 0644)
+	if err != nil { return }
+
+	if _, err = w.Seek(int64(HeaderSize), 0); err != nil {
+		return
 	}
 
-	data = make([]byte, c.dlen)
-	err = c.read(data, c.dpos)
+	wb := bufio.NewWriter(w)
+	hash := cdbHash()
+	hw := io.MultiWriter(hash, wb)
+	htables := make(map[uint32][]slot)
 
+	pos := HeaderSize
+	buf := make([]byte, 8)
+	for kstring, values := range c.m {
+		key := []byte(kstring)
+		klen := uint32(len(key))
+		for _, dstring := range values {
+			data := []byte(dstring)
+			dlen := uint32(len(data))
+			writeNums(wb, klen, dlen, buf)
+
+			hash.Reset()
+			hw.Write(key)
+			wb.Write(data)
+
+			h := hash.Sum32()
+			tableNum := h % 256
+			htables[tableNum] = append(htables[tableNum], slot{h, pos})
+			pos += 8 + klen + dlen
+		}
+	}
+
+	maxSlots := 0
+	for _, slots := range htables {
+		if len(slots) > maxSlots {
+			maxSlots = len(slots)
+		}
+	}
+
+	slotTable := make([]slot, maxSlots * 2)
+
+	header := make([]byte, HeaderSize)
+	for i := uint32(0); i < 256; i++ {
+		slots := htables[i]
+		if slots == nil {
+			putNum(header[i * 8:], pos)
+			continue
+		}
+
+		nslots := uint32(len(slots) * 2)
+		hashSlotTable := slotTable[:nslots]
+
+		for j:= 0; j < len(hashSlotTable); j++ {
+			hashSlotTable[j].h = 0
+			hashSlotTable[j].pos = 0
+		}
+
+		for _, slot := range slots {
+			slotPos := (slot.h / 256) % nslots
+			if hashSlotTable[slotPos].pos != 0 {
+				slotPos++
+				if slotPos == uint32(len(hashSlotTable)) {
+					slotPos = 0
+				}
+			}
+			hashSlotTable[slotPos] = slot
+		}
+
+		if err = writeSlots(wb, hashSlotTable, buf); err != nil {
+			return
+		}
+
+
+		putNum(header[i*8:], pos)
+		putNum(header[i*8+4:], nslots)
+		pos += 8 * nslots
+	}
+
+	if err = wb.Flush(); err != nil {
+		return
+	}
+
+	if _, err = w.Seek(0, 0); err != nil {
+		return
+	}
+
+	if _, err = w.Write(header); err != nil { return }
+	if err = os.Rename(tmp.Name(), f); err != nil { return }
+
+	c.closer = w
 	return
 }
 
-// FindStart resets the cdb to search for the first record under a new key.
-func (c *Cdb) FindStart() { c.loop = 0 }
-
-// FindNext returns the next data value for the given key as a SectionReader.
-// If there are no more records for the given key, it returns EOF.
-// FindNext acts as an iterator: The iteration should be initialized by calling
-// FindStart and all subsequent calls to FindNext should use the same key value.
-func (c *Cdb) FindNext(key []byte) (rdata *io.SectionReader, err error) {
-	if err := c.find(key); err != nil {
-		return nil, err
-	}
-	return io.NewSectionReader(c.r, int64(c.dpos), int64(c.dlen)), nil
-}
-
-// Find returns the first data value for the given key as a SectionReader.
-// Find is the same as FindStart followed by FindNext.
-func (c *Cdb) Find(key []byte) (rdata *io.SectionReader, err error) {
-	c.FindStart()
-	return c.FindNext(key)
-}
-
-func (c *Cdb) find(key []byte) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = e.(error)
-		}
-	}()
-
-	var pos, h uint32
-
-	klen := uint32(len(key))
-	if c.loop == 0 {
-		h = checksum(key)
-		c.hpos, c.hslots = c.readNums((h << 3) & 2047)
-		if c.hslots == 0 {
-			return io.EOF
-		}
-		c.khash = h
-		h >>= 8
-		h %= c.hslots
-		h <<= 3
-		c.kpos = c.hpos + h
+// Return the map of all the keys/values
+func (c *Cdb) Map() (map[string][]string, error) {
+	if c.m != nil {
+		return c.m, nil
 	}
 
-	for c.loop < c.hslots {
-		h, pos = c.readNums(c.kpos)
-		if pos == 0 {
-			return io.EOF
+	c.m = make(map[string][]string)
+
+	var klen, dlen uint32
+	last, _ := c.readNums(0)
+	for pos := HeaderSize; pos < last; pos = pos + 8 + klen + dlen {
+		klen, dlen = c.readNums(pos)
+		kval := make([]byte, klen)
+		dval := make([]byte, dlen)
+		if err := c.read(kval, pos + 8); err != nil {
+			return nil, err
 		}
-		c.loop++
-		c.kpos += 8
-		if c.kpos == c.hpos+(c.hslots<<3) {
-			c.kpos = c.hpos
+		if err := c.read(dval, pos + 8 + klen); err != nil {
+			return nil, err
 		}
-		if h == c.khash {
-			rklen, rdlen := c.readNums(pos)
-			if rklen == klen {
-				if c.match(key, pos+8) {
-					c.dlen = rdlen
-					c.dpos = pos + 8 + klen
-					return nil
-				}
-			}
-		}
+
+		c.m[string(kval)] = append(c.m[string(kval)], string(dval))
 	}
 
-	return io.EOF
+	return c.m, nil
 }
+
 
 func (c *Cdb) read(buf []byte, pos uint32) error {
 	_, err := c.r.ReadAt(buf, int64(pos))
 	return err
-}
-
-func (c *Cdb) match(key []byte, pos uint32) bool {
-	buf := c.buf
-	klen := len(key)
-	for n := 0; n < klen; n += len(buf) {
-		nleft := klen - n
-		if len(buf) > nleft {
-			buf = buf[:nleft]
-		}
-		if err := c.read(buf, pos); err != nil {
-			panic(err)
-		}
-		if !bytes.Equal(buf, key[n:n+len(buf)]) {
-			return false
-		}
-		pos += uint32(len(buf))
-	}
-	return true
 }
 
 func (c *Cdb) readNums(pos uint32) (uint32, uint32) {

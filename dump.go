@@ -1,4 +1,4 @@
-package cdb
+package cdbmap
 
 import (
 	"bufio"
@@ -28,7 +28,7 @@ func Dump(w io.Writer, r io.Reader) (err error) {
 		readNum()
 	}
 
-	pos := headerSize
+	pos := HeaderSize
 	for pos < eod {
 		klen, dlen := readNum(), readNum()
 		rw.writeString(fmt.Sprintf("+%d,%d:", klen, dlen))

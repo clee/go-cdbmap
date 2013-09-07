@@ -1,4 +1,4 @@
-package cdb
+package cdbmap
 
 import "hash"
 
