@@ -55,6 +55,8 @@ func New(r io.ReaderAt) *Cdb {
 	return c
 }
 
+// NewFromMap creates a new Cdb from the given map[string][]string, which should be
+// a map of string keys to arrays of string values.
 func NewFromMap(m map[string][]string) *Cdb {
 	c := new(Cdb)
 	c.r = nil
@@ -62,6 +64,7 @@ func NewFromMap(m map[string][]string) *Cdb {
 	return c
 }
 
+// Write takes the map in c.m and writes it to a CDB file on the disk.
 func (c *Cdb) Write(f string) (err error) {
 	tmp, err := ioutil.TempFile("", f)
 	if err != nil { return }
