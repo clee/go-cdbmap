@@ -28,6 +28,7 @@ package main
 
 import (
 	"github.com/clee/go-cdbmap"
+	"fmt"
 )
 
 func main() {
@@ -37,12 +38,21 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	// Now that we have a map, we can loop over the keys...
+	for key, values := range m {
+		fmt.Printf("key: %s [\n", key)
+
+		// And all of the values, too
+		for _, value := range values {
+			fmt.Printf("\t%s\n", value)
+		}
+		fmt.Printf("]\n")
+	}
 
 	// Take a map[string][]string and turn it into a cdb file
 	nc := cdbmap.NewFromMap(m)
 	nc.Write("/tmp/test.cdb")
 }
-
 ```
 
 ## Utilities
