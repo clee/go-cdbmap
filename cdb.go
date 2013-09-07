@@ -51,6 +51,7 @@ func (c *Cdb) Close() (err error) {
 func New(r io.ReaderAt) *Cdb {
 	c := new(Cdb)
 	c.r = r
+	c.m = nil
 	c.buf = make([]byte, 64)
 	return c
 }
