@@ -23,7 +23,7 @@ or on the command line by running `go doc github.com/clee/go-cdbmap`.
 
 The usage is extremely simple; here is an example program that shows usage of the entire API.
 
-```
+```go
 package main
 
 import (
