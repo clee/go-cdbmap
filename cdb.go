@@ -1,4 +1,4 @@
-// Package cdb reads and writes cdb ("constant database") files.
+// Package cdbmap reads and writes cdb ("constant database") files.
 //
 // See the original cdb specification and C implementation by D. J. Bernstein
 // at http://cr.yp.to/cdb.html.
@@ -66,12 +66,7 @@ func NewFromMap(m map[string][]string) *Cdb {
 }
 
 // Write takes the map in c.m and writes it to a CDB file on the disk.
-func (c *Cdb) Write(f string) (err error) {
-	tmp, err := ioutil.TempFile("", f)
-	if err != nil { return }
-	w, err := os.OpenFile(tmp.Name(), os.O_RDWR | os.O_CREATE, 0644)
-	if err != nil { return }
-
+func (c *Cdb) Write(w io.WriteSeeker) (err error) {
 	if _, err = w.Seek(int64(HeaderSize), 0); err != nil {
 		return
 	}
@@ -79,10 +74,10 @@ func (c *Cdb) Write(f string) (err error) {
 	wb := bufio.NewWriter(w)
 	hash := cdbHash()
 	hw := io.MultiWriter(hash, wb)
-	htables := make(map[uint32][]slot)
-
 	pos := HeaderSize
 	buf := make([]byte, 8)
+	htables := make(map[uint32][]slot)
+
 	for kstring, values := range c.m {
 		key := []byte(kstring)
 		klen := uint32(len(key))
@@ -190,6 +185,29 @@ func (c *Cdb) Map() (map[string][]string, error) {
 	return c.m, nil
 }
 
+// FromFile is a convenience function that reads a CDB-formatted
+// file from the specified filename, and returns the CDB contents
+// in map[string][]string form (or an error if the map can't
+// be written for some reason).
+func FromFile(filename string) (map[string][]string, error) {
+	c, err := Cdb.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	return c.Map()
+}
+
+// ToFile is a convenience function that writes a map to the provided
+// filename in CDB format.
+func ToFile(m map[string][]string, f string) (err error) {
+	tmp, err := ioutil.TempFile("", f)
+	if err != nil { return }
+	w, err := os.OpenFile(tmp.Name(), os.O_RDWR | os.O_CREATE, 0644)
+	if err != nil { return }
+
+	c := Cdb.NewFromMap(m)
+	return c.Write(f)
+}
 
 func (c *Cdb) read(buf []byte, pos uint32) error {
 	_, err := c.r.ReadAt(buf, int64(pos))
