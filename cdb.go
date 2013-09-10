@@ -10,63 +10,40 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
-	"runtime"
 )
 
 const (
 	HeaderSize = uint32(256 * 8)
 )
 
-type Cdb struct {
-	r      io.ReaderAt
-	closer io.Closer
-	buf    []byte
-	m      map[string][]string
-}
+// Return the map of all the keys/values
+func Read(r io.ReaderAt) (map[string][]string, error) {
+	m := make(map[string][]string)
+	readNums := makeNumsReader(r)
+	read := makeReader(r)
 
-// Open opens the named file read-only and returns a new Cdb object.  The file
-// should exist and be a cdb-format database file.
-func Open(name string) (*Cdb, error) {
-	f, err := os.Open(name)
-	if err != nil {
-		return nil, err
+	last, _ := readNums(0)
+
+	var klen, dlen uint32
+	for pos := HeaderSize; pos < last; pos = pos + 8 + klen + dlen {
+		klen, dlen = readNums(pos)
+		kval := make([]byte, klen)
+		dval := make([]byte, dlen)
+		if err := read(kval, pos + 8); err != nil {
+			return nil, err
+		}
+		if err := read(dval, pos + 8 + klen); err != nil {
+			return nil, err
+		}
+
+		m[string(kval)] = append(m[string(kval)], string(dval))
 	}
-	c := New(f)
-	c.closer = f
-	runtime.SetFinalizer(c, (*Cdb).Close)
-	return c, nil
+
+	return m, nil
 }
 
-// Close closes the cdb for any further reads.
-func (c *Cdb) Close() (err error) {
-	if c.closer != nil {
-		err = c.closer.Close()
-		c.closer = nil
-		runtime.SetFinalizer(c, nil)
-	}
-	return err
-}
-
-// New creates a new Cdb from the given ReaderAt, which should be a cdb format database.
-func New(r io.ReaderAt) *Cdb {
-	c := new(Cdb)
-	c.r = r
-	c.m = nil
-	c.buf = make([]byte, 64)
-	return c
-}
-
-// NewFromMap creates a new Cdb from the given map[string][]string, which should be
-// a map of string keys to arrays of string values.
-func NewFromMap(m map[string][]string) *Cdb {
-	c := new(Cdb)
-	c.r = nil
-	c.m = m
-	return c
-}
-
-// Write takes the map in c.m and writes it to a CDB file on the disk.
-func (c *Cdb) Write(w io.WriteSeeker) (err error) {
+// Write takes the map in m and writes it to an io.WriteSeeker
+func Write(m map[string][]string, w io.WriteSeeker) (err error) {
 	if _, err = w.Seek(int64(HeaderSize), 0); err != nil {
 		return
 	}
@@ -78,7 +55,7 @@ func (c *Cdb) Write(w io.WriteSeeker) (err error) {
 	buf := make([]byte, 8)
 	htables := make(map[uint32][]slot)
 
-	for kstring, values := range c.m {
+	for kstring, values := range m {
 		key := []byte(kstring)
 		klen := uint32(len(key))
 		for _, dstring := range values {
@@ -152,37 +129,8 @@ func (c *Cdb) Write(w io.WriteSeeker) (err error) {
 	}
 
 	if _, err = w.Write(header); err != nil { return }
-	if err = os.Rename(tmp.Name(), f); err != nil { return }
 
-	c.closer = w
 	return
-}
-
-// Return the map of all the keys/values
-func (c *Cdb) Map() (map[string][]string, error) {
-	if c.m != nil {
-		return c.m, nil
-	}
-
-	c.m = make(map[string][]string)
-
-	var klen, dlen uint32
-	last, _ := c.readNums(0)
-	for pos := HeaderSize; pos < last; pos = pos + 8 + klen + dlen {
-		klen, dlen = c.readNums(pos)
-		kval := make([]byte, klen)
-		dval := make([]byte, dlen)
-		if err := c.read(kval, pos + 8); err != nil {
-			return nil, err
-		}
-		if err := c.read(dval, pos + 8 + klen); err != nil {
-			return nil, err
-		}
-
-		c.m[string(kval)] = append(c.m[string(kval)], string(dval))
-	}
-
-	return c.m, nil
 }
 
 // FromFile is a convenience function that reads a CDB-formatted
@@ -190,11 +138,11 @@ func (c *Cdb) Map() (map[string][]string, error) {
 // in map[string][]string form (or an error if the map can't
 // be written for some reason).
 func FromFile(filename string) (map[string][]string, error) {
-	c, err := Cdb.Open(filename)
+	f, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
-	return c.Map()
+	return Read(f)
 }
 
 // ToFile is a convenience function that writes a map to the provided
@@ -202,21 +150,29 @@ func FromFile(filename string) (map[string][]string, error) {
 func ToFile(m map[string][]string, f string) (err error) {
 	tmp, err := ioutil.TempFile("", f)
 	if err != nil { return }
+
 	w, err := os.OpenFile(tmp.Name(), os.O_RDWR | os.O_CREATE, 0644)
 	if err != nil { return }
 
-	c := Cdb.NewFromMap(m)
-	return c.Write(f)
+	r := Write(m, w)
+	if err = os.Rename(tmp.Name(), f); err != nil { return }
+
+	return r
 }
 
-func (c *Cdb) read(buf []byte, pos uint32) error {
-	_, err := c.r.ReadAt(buf, int64(pos))
-	return err
-}
-
-func (c *Cdb) readNums(pos uint32) (uint32, uint32) {
-	if _, err := c.r.ReadAt(c.buf[:8], int64(pos)); err != nil {
-		panic(err)
+func makeNumsReader(r io.ReaderAt) (func (uint32) (uint32, uint32)) {
+	buf := make([]byte, 64)
+	return func(pos uint32) (uint32, uint32) {
+		if _, err := r.ReadAt(buf[:8], int64(pos)); err != nil {
+			panic(err)
+		}
+		return binary.LittleEndian.Uint32(buf), binary.LittleEndian.Uint32(buf[4:])
 	}
-	return binary.LittleEndian.Uint32(c.buf), binary.LittleEndian.Uint32(c.buf[4:])
+}
+
+func makeReader(r io.ReaderAt) (func ([]byte, uint32) error) {
+	return func(buf []byte, pos uint32) error {
+		_, err := r.ReadAt(buf, int64(pos))
+		return err
+	}
 }
