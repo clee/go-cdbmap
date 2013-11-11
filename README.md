@@ -18,7 +18,7 @@ Assuming you have a working Go environment, installation is simply:
 	go get github.com/clee/go-cdbmap
 
 The package documentation can be viewed online at
-http://gopkgdoc.appspot.com/pkg/github.com/clee/go-cdbmap
+http://godoc.org/github.com/clee/go-cdbmap
 or on the command line by running `go doc github.com/clee/go-cdbmap`.
 
 The usage is extremely simple; here is an example program that shows usage of the entire API.
